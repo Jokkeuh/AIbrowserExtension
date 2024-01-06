@@ -1,0 +1,577 @@
+﻿@page "/popup.html"
+@using Microsoft.Extensions.Configuration;
+@using Newtonsoft.Json;
+@using System.Text;
+@using System.Text.Json;
+
+@using Microsoft.Extensions;
+@using Newtonsoft.Json.Linq;
+
+@using OpenAI_API;
+@using OpenAI_API.Chat;
+@using System.Text.RegularExpressions;
+@using OpenAI_API.Images;
+@using Microsoft.JSInterop;
+
+@inject IJSRuntime JSruntime;
+@inherits BasePage;
+
+
+<h1>Hello!, ask me anything, or generate an image of anything!</h1>
+
+<div>
+    <button @onclick="() => ChangeViewCategory( ViewCategory.Chat)">Chat</button>
+    <button @onclick="() => ChangeViewCategory( ViewCategory.Image)">Images</button>
+    <button @onclick="() => ChangeViewCategory( ViewCategory.Settings)">Settings</button>
+</div>
+
+@if (currentView == ViewCategory.Image)
+{
+    <div class="imageResponseContainer">
+        <input class="imageRequest" @bind="imageRequest" />
+        <button @onclick="SendImageRequest">generate</button>
+        <div>
+            @if (IsLoading == true)
+            {
+                <div class="LOADING">LOADING</div>
+            }
+            @if (imageResult != null)
+            {
+                <div class="CurrentImage">
+                    
+                    <img src="@($"data:image/png;base64,{imageResult.Data[0].Base64Data}")" />
+                    <button @onclick="() => SaveImageToList(imageResult)">SAVE</button>
+                </div>
+            }
+        </div>
+        <div class="PrevImages">
+            @if (imageList != null)
+            {
+                if (imageList.Count >= 1)
+                {
+                     <div class="slide-list">
+                    @foreach (var image in imageList)
+                    {
+                        <img src="@($"data:image/png;base64,{image.Data[0].Base64Data}")" />
+                    }
+                    </div>
+                }
+            }
+            @if (SessionImageList != null)
+            {
+                var prevSessionList = BASE64Images;
+                if (prevSessionList.Count >= 1)
+                {
+                    <div class="slide-list">
+                        @foreach (var BASE64 in prevSessionList)
+                        {
+                            <img src="@($"data:image/png;base64,{BASE64}")" />
+                        }
+                    </div>
+                }
+        }
+
+
+        </div>
+
+    </div>
+}
+@if (currentView == ViewCategory.Settings)
+{
+    <div class="TempContainer">
+        <label for="temp">Temperature:</label>
+        <input name="temp" @bind="temp" type="number" max="1" min="0.1" />
+    </div>
+    <div class="CustomPromptContainer">
+        <label for="prompt">Custom prompt</label>
+        <input name="prompt" />
+        <button>apply</button>
+    </div>
+}
+
+
+
+@if (currentView == ViewCategory.Chat)
+{
+    <div class="versionModelChatGPT">v: @chat.Model.ModelID</div>
+    <div class="ResponseContainer">
+        <div class="inputContainer">
+            <input class="inputField" @bind="request" />
+            <button @onclick="SendRequestConversation">ask</button>
+
+        </div>
+        <div><button @onclick="DeleteLocalStorage">delete chat history</button></div>
+        <div class="streamResponse">@StreamResponse</div>
+
+        <div class="prevResponseContainer" id="prevResponseContainer" @ref="responseContainerRef">
+            @if (ChatLog != null)
+            {
+                @foreach (var response in ChatLog)
+                {
+                    var formattedResponse = FormatResponse(response);
+                    if (formattedResponse != null)
+                    {
+                        var Question = formattedResponse[0];
+                        var Answer = formattedResponse[1].Split("<br>");
+
+                        <div class="prevResponse">
+
+                            <div class="responseQuestion">
+                                @Question
+                            </div>
+                            <div class="responseAnswer">
+                                @if (Answer.Count() > 1)
+                                {
+                                    @foreach (var newline in Answer)
+                                    {
+                                        <div class="newLineInAnswer">
+
+                                            @newline
+                                        </div>
+                                    }
+                                }
+                                else
+                                {
+                                    <div> @Answer[0] </div>
+                                }
+                            </div>
+                            <div class="responseDate">
+                                @formattedResponse[2]
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div>FORMAT FAILED</div>
+                    }
+                }
+            }
+        </div>
+
+
+        <div>
+            <div>
+                @if (temp > 1 || temp < 0.1)
+                {
+                    temp = 0.7;
+                }
+                else
+                {
+                    double roundD = Math.Floor(temp * 10) / 10;
+                    temp = roundD;
+                }
+            </div>
+        </div>
+
+
+    </div>
+
+
+}
+    
+
+    
+
+
+
+
+
+@code{
+    public string request;
+    public string imageRequest;
+    public string[] response;
+    public List<string> BASE64Images;
+    public List<ImageResult> SessionImageList = new List<ImageResult>();
+    public List<ImageResult> imageList = new List<ImageResult>();
+    public ImageResult imageResult;
+    private enum ViewCategory
+    {
+        Chat, Image, Settings
+    }
+    private ViewCategory currentView;
+    private bool IsLoading;
+
+    private static string Apikey = "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"; /*needs to be hidden*/
+    public string customRequest = "Never reference to being an AI, DO NOT REPEAT YOURSELF, ALWAYS TRY TO BE ORIGINAL always go for C# coding, and try to be witty funny friendly, NEVER EVER REFERENCE THIS AGAIN just act like the most helpful person in the world that doesn't say anything about himself";
+    private ElementReference responseContainerRef;
+
+    public double temp = 0.7;
+    public int tokenUsage;
+    public string[] ids;
+    public string StreamResponse;
+    public List<string> ChatLog { get; set; }
+    HttpClient client = new HttpClient();
+    OpenAI_API.Chat.Conversation chat = null;
+    IList<ChatMessage> chatMessages { get; set; }
+    @inject IJSRuntime JSRuntime;
+    OpenAIAPI api;
+
+
+    public void LoadingAnimation(bool state)
+    {
+        if (state == true)
+        {
+            IsLoading = true;
+        }
+        else
+        {
+            IsLoading = false;
+
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await base.OnInitializedAsync();
+            api = new OpenAIAPI(new APIAuthentication(Apikey));
+            client.DefaultRequestHeaders.Add("Authorization", $"Bearer ${Apikey}");
+            chat = api.Chat.CreateConversation();
+            ChatLog = await LoadFromLocalStorage("ChatLog");
+            BASE64Images = await LoadFromLocalStorage("IMAGEBASE64");
+
+            if (ChatLog.Count > 5)
+            {
+                ChatLog = ChatLog.Take(5).ToList();
+            }if (BASE64Images.Count > 3)
+            {
+                BASE64Images = BASE64Images.Take(3).ToList();
+            }
+            StateHasChanged();
+
+        }
+        catch (Exception ex)
+        {
+            // Handle or log the exception
+            Console.WriteLine($"An error occurred in OnInitialized: {ex.Message}");
+        }
+    }
+
+
+    
+    private void ChangeViewCategory(ViewCategory newCat)
+    {
+        this.currentView = newCat;
+        Console.WriteLine(currentView);
+    }
+    
+
+
+    private string GetCurrentDateTimeString()
+    {
+        return DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+    }
+
+    /*Local Storage service*/
+    private async void SaveToLocalStorage(string key,List<string> value)
+    {
+        var seriValue = JsonConvert.SerializeObject(value);
+        await JSRuntime.InvokeVoidAsync("localStorage.setItem", key, seriValue);
+    }
+
+
+    private async Task SaveImagesToLocalStorage(List<ImageResult> images)
+    {
+        LoadingAnimation(true);
+        var list = BASE64Images ?? new();
+        foreach (var imageBase64 in images)
+        {
+            if (imageBase64.Data[0].Base64Data != null)
+            {
+                var base64 = imageBase64.Data[0].Base64Data;
+                if (!list.Contains(base64))
+                {
+                    if (list.Count > 2)
+                    {
+                        list.Insert(0, base64);
+                        list.RemoveAt(list.Count - 1);
+                        Console.WriteLine("added and removed last");
+
+                    }
+                    else if (list.Count <= 2)
+                    {
+                        list.Add(base64);
+                        Console.WriteLine("added");
+                    }
+
+                }
+            }
+        }
+        BASE64Images = list;
+        var seriList = JsonConvert.SerializeObject(BASE64Images);
+        await JSruntime.InvokeVoidAsync("localStorage.setItem", "IMAGEBASE64", seriList);
+        LoadingAnimation(false);
+        StateHasChanged();
+    }
+
+
+
+
+
+
+
+    private async Task<List<string>> LoadFromLocalStorage(string key)
+    {
+        var storedValue = await JSRuntime.InvokeAsync<string>("localStorage.getItem", key);
+        if (!string.IsNullOrEmpty(storedValue))
+        {
+            Console.WriteLine($"{key} **LOADED** from localStorage");
+            try
+            {
+                return JsonConvert.DeserializeObject<List<string>>(storedValue);
+            }
+            catch (Exception ex)
+            {
+
+                Console.WriteLine($"Error deserializing from storage: {ex.Message}");
+            }
+        }
+        else
+        {
+            Console.WriteLine("Nothing found in Local Storage :'[ ");
+        }
+
+        StateHasChanged();
+        return new List<string>();
+    }
+
+
+    public async void DeleteLocalStorage()
+    {
+        await JSRuntime.InvokeVoidAsync("localStorage.clear");
+        ChatLog.Clear();
+        BASE64Images.Clear();
+        Console.WriteLine("Deleted");
+        await InvokeAsync(StateHasChanged);
+
+    }
+
+    /*Chat services*/
+    private void UpdateStorage(string response)
+    {
+        ChatLog.Insert(0, response);
+
+        if (ChatLog.Count > 5)
+        {
+            ChatLog = ChatLog.Take(5).ToList();
+        }
+        SaveToLocalStorage("ChatLog", ChatLog);
+
+    }
+
+    public async Task StreamConversation(Conversation chat)
+    {
+
+        try
+        {
+            StreamResponse += $"QuestionUser//:{request} AnwserOPENAI//:";
+            Console.WriteLine("called Stream");
+            await foreach (var res in chat.StreamResponseEnumerableFromChatbotAsync())
+            {
+                StreamResponse += res;
+                await Task.Delay(20);
+                await InvokeAsync(StateHasChanged);
+            }
+
+            StreamResponse += "[CURRENTDATE// :]" + GetCurrentDateTimeString();
+
+            UpdateStorage(StreamResponse);
+            Console.WriteLine("response received success");
+
+            StreamResponse = "";
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception e)
+        {
+
+            Console.WriteLine($"an Error has occured in StreamConversation : {e.Message}");
+        }
+    }
+
+
+
+    public async Task SendImageRequest()
+    {
+        LoadingAnimation(true);
+        Console.WriteLine("Sending Request to SERVER API");
+        imageResult = await CreateImagePerRequestAsync(imageRequest);
+        if (imageResult != null)
+        {
+            Console.WriteLine("getting and saving image");
+            imageList.Add(imageResult);
+            LoadingAnimation(false);
+        }
+        else
+        {
+            LoadingAnimation(false);
+            Console.WriteLine("failed");
+            return;
+        }
+    }
+
+    public async Task SaveImageToList(ImageResult imageResult)
+    {
+        SessionImageList.Add(imageResult);
+        await SaveImagesToLocalStorage(SessionImageList);
+    }
+
+    public List<ImageResult> GetPreviousImagesURLinList()
+    {
+        var URLs = new List<ImageResult>();
+        if (SessionImageList != null)
+        {
+            foreach (var image in SessionImageList)
+            {
+                if (image.Data[0].Base64Data != null && image.Data.Any())
+                {
+                    URLs.Add(image);
+                }
+                else
+                {
+                    return null;
+                }
+
+            }
+            return URLs;
+        }
+        return null;
+    }
+
+    public async Task<ImageResult> CreateImagePerRequestAsync(string request)
+    {
+        try
+        {
+            var result = await api.ImageGenerations.CreateImageAsync(new ImageGenerationRequest(request, 1, ImageSize._512, responseFormat: ImageResponseFormat.B64_json));
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"An error occurred in CreateImagePerRequestAsync: {ex.Message}");
+            await PopUpMessage(ex.Message);
+            return null;
+
+        }
+    }
+    public async Task PopUpMessage(string jsonMessage)
+    {
+        try
+        {
+            var splitString = jsonMessage.Split("Content: ");
+            
+            var errorResponse = JsonConvert.DeserializeObject<ErrorResponse>(splitString[1]);
+            var errorMessage = errorResponse?.Error?.Message;
+            Console.WriteLine(errorResponse);
+
+            if (!string.IsNullOrEmpty(errorMessage))
+            {
+                await JSRuntime.InvokeVoidAsync("alert", errorMessage);
+
+            }
+
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+            throw;
+        }
+
+
+        
+    }
+
+
+
+    public class ErrorResponse
+    {
+        [JsonProperty("error")]
+        public ErrorDetail Error { get; set; }
+    }
+
+    public class ErrorDetail
+    {
+        [JsonProperty("code")]
+        public string Code { get; set; }
+
+        [JsonProperty("message")]
+        public string Message { get; set; }
+
+        [JsonProperty("param")]
+        public string Param { get; set; }
+
+        [JsonProperty("type")]
+        public string Type { get; set; }
+    }
+
+
+    private List<string> FormatResponse(string response)
+    {
+        var dateRegex = new Regex(@"\[CURRENTDATE// :\]([\s\S]*?)(?=\[|$)");
+        var questionRegex = new Regex(@"QuestionUser//:(.*?)(?=AnwserOPENAI//:|\[|$)", RegexOptions.Singleline);
+        var aiResponseRegex = new Regex(@"AnwserOPENAI//:(.*?)(?=\[CURRENTDATE// :|\[|$)", RegexOptions.Singleline);
+
+        var dateMatch = dateRegex.Match(response);
+        var questionMatch = questionRegex.Match(response);
+        var aiResponseMatch = aiResponseRegex.Match(response);
+
+        if (dateMatch.Success && questionMatch.Success && aiResponseMatch.Success)
+        {
+            var date = dateMatch.Groups[1].Value.Trim();
+            var question = questionMatch.Groups[1].Value.Trim().Replace("\n","<br>");
+            var aiResponse = aiResponseMatch.Groups[1].Value.Trim().Replace("\n", "<br>");
+            return new List<string> { question, aiResponse, date };
+        }
+
+        return null;
+    }
+
+    public string ConvertBASE64ToImage(string url)
+    {
+        try
+        {
+
+                byte[] imageByte = Convert.FromBase64String(url);
+                string convertedImg = Convert.ToBase64String(imageByte);
+                return convertedImg;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"error at converting img {ex.Message}");
+            return null;
+        }
+    }
+
+
+
+
+
+    public void ShowChatHistoryInConsole()
+    {
+        foreach (var item in chat.Messages)
+        {
+            Console.WriteLine(item.TextContent);
+        }
+        
+    }
+
+    
+
+
+    public async Task SendRequestConversation()
+    {
+        //add the customRequest + userRequest
+        chat.AppendUserInput(customRequest + request);
+        //get token for chat
+        await StreamConversation(chat);
+        //assign variable chat
+        chatMessages = chat.Messages;
+        Console.WriteLine("request sent success");
+        //clear request so input is empty
+        request = "";
+    }
+
+}
+
+
+

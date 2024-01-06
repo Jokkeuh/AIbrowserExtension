@@ -1,0 +1,33 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <PropertyGroup>
+    <TargetFramework>net7.0</TargetFramework>
+    <UserSecretsId>c1eedabe-87a9-48bd-aff3-d16549e0de00</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Blazor.BrowserExtension" Version="0.12.*" />
+    <PackageReference Include="bootstrap" Version="5.3.2" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="7.*" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="7.*" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="OpenAI" Version="1.9.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="wwwroot\**\*" CopyToOutputDirectory="Always" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Remove="wwwroot\scrollToBottom.js" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Update="Properties\appsetting.secrets.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>
